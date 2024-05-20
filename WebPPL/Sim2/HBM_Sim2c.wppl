@@ -1,0 +1,167 @@
+// Run: webppl HBM_Sim2c.wppl --require webppl-csv
+// Control condition without exposure data
+
+const FILENAME_F1 = 'results_data/simulation2c_f1.csv'
+const FILENAME_F2 = 'results_data/simulation2c_f2.csv'
+
+/////////////////////// Pre-exposure Data //////////////////////
+
+const frames = ['DO', 'PO'];
+
+// Verbs: [give, show, send, lend, hand, loan, offer, sell, post]
+const V_freq_100utt = [71,  4, 13,  1,  3,  0,  6,  2,  0]
+const V_freq_500utt = [338,  16,  70,   8,  16,   1,  32,  18,   1]
+const V_freq_1000utt = [684,  32, 113,  33,  26,   0,  63,  44,   5]
+
+const DO_freq_100utt = [51, 1, 5, 1, 0, 0, 2, 0, 0]
+const DO_freq_500utt = [203, 6, 8, 1, 9, 0, 10, 4, 0]
+const DO_freq_1000utt = [438, 18, 17, 6, 12, 0, 23, 4, 0]
+
+var generateData = function(v, n, x){
+  // v: verb name (str)
+  // n: total # of utterances; 
+  // x: # of DOs
+  var i = _.range(n)
+  var frame = function(j){
+    return j < x ? {verb: v, utt: 'DO'} : {verb: v, utt: 'PO'}
+  }
+  var data = map(frame, i)
+  return data
+}
+
+var get_priorData = function(V_freq, DO_freq){
+  
+  var priorData_give = generateData('give', V_freq[0], DO_freq[0])
+  var priorData_show = generateData('show', V_freq[1], DO_freq[1])
+  var priorData_send = generateData('send', V_freq[2], DO_freq[2])
+  var priorData_lend = generateData('lend', V_freq[3], DO_freq[3])
+  var priorData_hand = generateData('hand', V_freq[4], DO_freq[4])
+  var priorData_loan = generateData('loan', V_freq[5], DO_freq[5])
+  var priorData_offer = generateData('offer', V_freq[6], DO_freq[6])
+  var priorData_sell = generateData('sell', V_freq[7], DO_freq[7])
+  var priorData_post = generateData('post', V_freq[8], DO_freq[8])
+  
+  var priorData = priorData_give.concat(priorData_show,
+                                        priorData_send,
+                                        priorData_lend, 
+                                        priorData_hand, 
+                                        priorData_loan,
+                                        priorData_offer,
+                                        priorData_sell,
+                                        priorData_post
+                                        )
+  return priorData
+}
+
+var priorData_100utt = get_priorData(V_freq_100utt, DO_freq_100utt)
+var priorData_500utt = get_priorData(V_freq_500utt, DO_freq_500utt)
+var priorData_1000utt = get_priorData(V_freq_1000utt, DO_freq_1000utt)
+
+
+////////////////////// Exposure Data //////////////////////
+
+const Primes = [
+  ['show','give'], ['hand','send'], ['give','lend'], ['loan','give'],
+  ['send','post'], ['give','hand'], ['post','sell'], ['lend','show'],
+  ['show','give'], ['hand','send'], ['loan','give'], ['sell','show'],
+  ['send','post'], ['give','hand'], ['post','send'], ['show','lend'],
+  ['hand','offer'], ['lend','sell'], ['send','show'], ['show','throw'],
+  ['loan','give'], ['give','hand'], ['lend','show'], ['send','post'],
+  ['give','lend'], ['hand','offer'], ['send','show'], ['show','throw'],
+  ['loan','give'], ['hand','give'], ['lend','show'], ['send','post']
+]
+
+const Targets = ['show', 'hand', 'give', 'loan', 'send', 'give', 'post', 'lend',
+                 'show', 'hand', 'loan', 'sell', 'send', 'give', 'post', 'show',
+                 'hand', 'lend', 'send', 'show', 'loan', 'give', 'lend', 'send',
+                 'give', 'hand', 'send', 'show', 'loan', 'hand', 'lend', 'send']
+
+
+
+////////////////////// Learning Prior Data //////////////////////
+
+
+var updatePosteriors = function(posteriorData){
+  return Infer({method: 'MCMC', samples:10000, burn:10000,lag:20}, function(){
+  var phi = dirichlet(ones([frames.length, 1]))
+  var alpha = 10
+  var prototype = T.mul(phi, alpha)
+  var makeVerb = mem(function(verb){
+    var ditransitiveProbs = dirichlet(prototype)
+    return Categorical({vs: frames, ps: ditransitiveProbs})
+  })
+  var obsFn = function(datum){
+    observe(makeVerb(datum.verb), datum.utt)
+  }
+  mapData({data: posteriorData}, obsFn)
+  return {give: sample(makeVerb('give')),
+          show: sample(makeVerb('show')),
+          send: sample(makeVerb('send')),
+          lend: sample(makeVerb('lend')),
+          hand: sample(makeVerb('hand')),
+          loan: sample(makeVerb('loan')),
+          offer: sample(makeVerb('offer')),
+          sell: sample(makeVerb('sell')),
+          post: sample(makeVerb('post')),
+         }
+})}
+
+
+var outputFile_filler1 = csv.open(FILENAME_F1)
+var outputFile_filler2 = csv.open(FILENAME_F2)
+var header = 'Iteration, Item, Cond, Target, P_DO, P_PO'
+csv.writeLine(header, outputFile_filler1)
+csv.writeLine(header, outputFile_filler2)
+
+
+var one_iteration_filler1 = function(i){
+
+  console.log('Iteration', i+1)
+  var iteration = i + 1
+
+  var writePosteriors = function(j){
+    var item = j + 1
+    console.log('Item', j+1);
+    var target = Targets[j]
+    var data = priorData_100utt.concat(priorData_100utt)
+    var posterior = updatePosteriors(data)
+    var target_marg = marginalize(posterior, function(x){return x[target]})
+    var P_DO = Math.exp(target_marg.score('DO'))
+    var P_PO = Math.exp(target_marg.score('PO'))
+    csv.writeLine([iteration, item, 'control', target, P_DO, P_PO].join(','), outputFile_filler1)
+  }
+  map(writePosteriors, _.range(Targets.length))
+}
+
+
+var one_iteration_filler2 = function(i){
+
+  console.log('Iteration', i+1)
+  var iteration = i + 1
+
+  var writePosteriors = function(j){
+    var item = j + 1
+    console.log('Item', j+1);
+    var target = Targets[j]
+    var data = priorData_100utt.concat(priorData_100utt, priorData_100utt)
+    var posterior = updatePosteriors(data)
+    var target_marg = marginalize(posterior, function(x){return x[target]})
+    var P_DO = Math.exp(target_marg.score('DO'))
+    var P_PO = Math.exp(target_marg.score('PO'))
+    csv.writeLine([iteration, item, 'control', target, P_DO, P_PO].join(','), outputFile_filler2)
+  }
+  map(writePosteriors, _.range(Targets.length))
+}
+
+
+map(one_iteration_filler1, _.range(10))
+map(one_iteration_filler2, _.range(10))
+csv.close(outputFile_filler1)
+csv.close(outputFile_filler2)
+
+
+
+
+
+
+
